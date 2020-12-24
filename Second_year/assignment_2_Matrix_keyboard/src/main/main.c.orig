@@ -1,0 +1,342 @@
+#include "mcu_support_package/inc/stm32f10x.h"
+
+#define longtime
+//#define multitap
+//#define matrix
+
+void SysTick_Handler(void);
+
+#ifdef matrix
+void screen(void);
+void show_number(int button_number);
+int screen_status=0;//1-there is displayed, 0-screen is clear
+#else
+void music(int column, int string);
+void keyboard(void);
+
+int music_status=0;//1-music playing, 0-music doesn't playing
+#endif
+
+int procrastination_status=1;//1 for waiting and 0 for cancel waiting
+
+#ifdef longtime
+#define seconds_for_longtime_push 1
+int frequency=0;//current frequency of the sound
+int longtime_counter=0;
+int shift=0;//frequency shift for the longtime pressing
+#endif
+
+int main(void)
+{
+#ifdef matrix
+  screen();
+#else
+  keyboard();
+#endif
+  return 0;
+}
+
+void keyboard()
+{
+  RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA|RCC_APB2Periph_GPIOB|RCC_APB2Periph_GPIOC,ENABLE);//power on A,B,C ports
+
+  GPIO_InitTypeDef string, column, piezodynamic;
+
+  string.GPIO_Mode=GPIO_Mode_IPU;
+  string.GPIO_Pin=GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_4;//four pins for 4 strings with 3 buttons for each
+  string.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOA, &string);//Initialization of PA.1-4 with LOW voltage
+
+  column.GPIO_Mode=GPIO_Mode_Out_OD;
+  column.GPIO_Pin=GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3;//three pins for 3 columns with 4 buttons for each
+  column.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOC, &column);//Initialization of PC.1-3 with HIGH voltage
+
+  piezodynamic.GPIO_Mode=GPIO_Mode_Out_PP;
+  piezodynamic.GPIO_Pin=GPIO_Pin_10;
+  piezodynamic.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOB, &piezodynamic);//Initialization of PB.10 with LOW voltage
+
+
+#ifdef longtime
+  while(1)
+  {
+    for(int i=1; i<4; i++)
+    {
+      GPIO_SetBits(GPIOC, GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3);//HIGH voltage on PC.1-3 pins
+      GPIOC->ODR&=~(1<<i);//LOW voltage on PC.i pin
+
+      __disable_irq();
+      SysTick_Config(72000);//Configure systick timer for 1msec
+      __enable_irq();
+      while(procrastination_status)   //Waiting for a 1msec
+      {
+
+      }
+      __disable_irq();//After the transition process we don't need 1msec timer, so we can disable it
+
+      int current_button=0;
+      while(((GPIOA->IDR&0x1E)>>1)!=0xF)   //While any button is pressed
+      {
+        if(music_status&&(((GPIOA->IDR&0x1E)>>1)==current_button))   //If music was playing up to this moment and the button has not changed, do not change the music_status and the systick configure
+        {
+
+        }
+        else
+        {
+          music_status=1;
+          music(i, ((GPIOA->IDR&0x1E)>>1));//E-1st string, D-2nd string, B-3rd string, 7-4th string
+          current_button=(GPIOA->IDR&0x1E)>>1;
+        }
+      }
+      shift=0;
+      music_status=0;
+      procrastination_status=1;
+    }
+  }
+#elif defined multitap
+  while(1)
+  {
+    int frequency=0;
+    int pressed_buttons=0xF;
+    int number_of_pressed_buttons=0;
+
+    static int i;
+    for(i=1; i<4; i++)
+    {
+      procrastination_status=1;
+      GPIO_SetBits(GPIOC, GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3);//HIGH voltage on PC.1-3 pins
+      GPIOC->ODR&=~(1<<i);//LOW voltage on PC.i pin
+
+      __disable_irq();
+      SysTick_Config(72000);//Configure systick timer for 1msec
+      __enable_irq();
+      while(procrastination_status)   //Waiting for a 1msec
+      {
+
+      }
+      __disable_irq();
+
+      static int j;
+      for(j=0; j<4; j++)
+      {
+        int base_frequency=500+100*j;
+        frequency+=!(((GPIOA->IDR&0x1E)>>1)& (1<<j))*base_frequency*i/2;//the idea is in that frequency of two buttons is an average of each separately
+        if(!(((GPIOA->IDR&0x1E)>>1)& (1<<j)))
+        {
+          pressed_buttons&=((GPIOA->IDR&0x1E)>>1);//variable to catch the moment when pressed buttons changes
+          number_of_pressed_buttons++;
+        }
+      }
+    }
+
+    while((((GPIOA->IDR&0x1E)>>1)==pressed_buttons)&&(number_of_pressed_buttons))//while pressed buttons have not changed and number of pressed buttons is not a zero
+    {
+      if(music_status)
+      {
+
+      }
+      else
+      {
+        if(number_of_pressed_buttons==1)
+        {
+          frequency*=2;//if the only one button is pressed, there is no second component of an average frequency
+          //so we should multiply a half of current frequency to get pure frequency of this button
+        }
+        music_status=1;
+        __disable_irq();
+        SysTick_Config(1.0/frequency*72000000);
+        __enable_irq();
+      }
+    }
+    music_status=0;
+  }
+#endif
+}
+
+#ifdef longtime
+void music(int column, int string)
+{
+  switch(string)
+  {
+  case 0xE:
+    {
+      __disable_irq();
+      SysTick_Config(1/(500.0-shift)/column*72000000);
+      __enable_irq();
+      frequency=500*column;
+      longtime_counter=0;//starts longtime timer
+      return;
+    }
+  case 0xD:
+    {
+      __disable_irq();
+      SysTick_Config(1/(600.0-shift)/column*72000000);
+      __enable_irq();
+      frequency=600*column;
+      longtime_counter=0;
+      return;
+    }
+  case 0xB:
+    {
+      __disable_irq();
+      SysTick_Config(1/(700.0-shift)/column*72000000);
+      __enable_irq();
+      frequency=700*column;
+      longtime_counter=0;
+      return;
+    }
+  case 0x7:
+    {
+      __disable_irq();
+      SysTick_Config(1/(800.0-shift)/column*72000000);
+      __enable_irq();
+      frequency=800*column;
+      longtime_counter=0;
+      return;
+    }
+  default:
+    {
+
+    }
+  }
+}
+#endif
+
+#ifdef matrix
+void screen()
+{
+  RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA|RCC_APB2Periph_GPIOB|RCC_APB2Periph_GPIOC,ENABLE);//power on A,B,C ports
+
+  GPIO_InitTypeDef keyboard_line, keyboard_column, screen_line, screen_column;
+
+  keyboard_line.GPIO_Mode=GPIO_Mode_IPU;
+  keyboard_line.GPIO_Pin=GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_4;//four pins for 4 lines with 3 buttons for each
+  keyboard_line.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOA, &keyboard_line);//Initialization of PA.1-4 with LOW voltage
+
+  keyboard_column.GPIO_Mode=GPIO_Mode_Out_OD;
+  keyboard_column.GPIO_Pin=GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3;//three pins for 3 columns with 4 buttons for each
+  keyboard_column.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOC, &keyboard_column);//Initialization of PC.1-3 with HIGH voltage
+
+  screen_line.GPIO_Mode=GPIO_Mode_Out_PP;
+  screen_line.GPIO_Pin=GPIO_Pin_9|GPIO_Pin_10|GPIO_Pin_11|GPIO_Pin_12|GPIO_Pin_13|GPIO_Pin_14|GPIO_Pin_15;//seven pins for 7 lines with 5 leds for each
+  screen_line.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOB, &screen_line);//Initialization of PB.9-15 with LOW voltage
+
+  keyboard_column.GPIO_Mode=GPIO_Mode_Out_PP;
+  keyboard_column.GPIO_Pin=GPIO_Pin_5|GPIO_Pin_6|GPIO_Pin_7|GPIO_Pin_8|GPIO_Pin_9;//five pins for 5 columns with 7 leds for each
+  keyboard_column.GPIO_Speed=GPIO_Speed_50MHz;
+  GPIO_Init(GPIOA, &screen_column);//Initialization of PA.5-9 with HIGH voltage
+
+  while(1)
+  {
+    int button_number=0;
+    static int i;
+    for(i=1; i<4; i++)
+    {
+      procrastination_status=1;
+      if(button_number)
+      {
+        break;
+      }
+
+      GPIO_SetBits(GPIOC, GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3);//HIGH voltage on PC.1-3 pins
+      GPIOC->ODR&=~(1<<i);//LOW voltage on PC.i pin
+
+      __disable_irq();
+      SysTick_Config(72000);//Configure systick timer for 1msec
+      __enable_irq();
+      while(procrastination_status)   //Waiting for a 1msec
+      {
+
+      }
+      __disable_irq();
+
+      static int j;
+      for(j=0; j<4; j++)
+      {
+        if(!(((GPIOA->IDR&0x1E)>>1)& (1<<j)))//if the j-th bit is not a zero
+        {
+          button_number=i+3*j;
+          break;
+        }
+      }
+    }
+
+    while(((GPIOA->IDR&0x1E)>>1)!=0xF)
+    {
+      if(screen_status)
+      {
+
+      }
+      else
+      {
+        screen_status=1;
+        show_number(button_number);
+      }
+    }
+    screen_status=0;
+  }
+}
+#endif
+
+#ifndef matrix
+void SysTick_Handler(void)
+{
+  if(procrastination_status)   //While procratinating
+  {
+    procrastination_status=0;
+  }
+  else     //While playing music
+  {
+    GPIOB->ODR^=1<<10;//Change status of the 10th pin in B port to vibrate a membrane
+
+#ifdef longtime
+    longtime_counter++;
+    if(longtime_counter==frequency*seconds_for_longtime_push)//For a while counter increments frequency*seconds_for_longtime_push times, it will take as much time as we set in the beginning of the program
+    {
+      shift=33;
+      music_status=0;//resets the status to refresh the frequency of music function
+    }
+#endif
+  }
+}
+#endif
+
+#ifdef matrix
+
+void show_number(int button_number)
+{
+  
+}
+
+void SysTick_Handler(void)
+{
+  if(procrastination_status)   //While procratinating
+  {
+    procrastination_status=0;
+  }
+}
+#endif
+
+// классический ассерт для STM32
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t * file, uint32_t line)
+{
+  /* User can add his own implementation to report the file name and line number,
+   ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+
+  (void)file;
+  (void)line;
+
+  __disable_irq();
+  while(1)
+  {
+    // это ассемблерная инструкция "отладчик, стой тут"
+    // если вы попали сюда, значит вы ошиблись в параметрах. Смотрите в call stack
+    __BKPT(0xAB);
+  }
+}
+#endif
